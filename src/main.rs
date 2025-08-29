@@ -305,7 +305,7 @@ fn find_probs_2d(outputs: &[Value]) -> Option<ndarray::Array2<f32>> {
 
 fn load_labels(path: &Path) -> Result<Vec<String>> {
     let s = fs::read_to_string(path)
-        .with_context(|| format!("讀取 labels 失敗: {}", path.display()))?;
+        .with_context(|| format!("can't load labels: {}", path.display()))?;
     let labels = s
         .lines()
         .map(|l| l.trim().to_string())
