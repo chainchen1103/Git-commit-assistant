@@ -144,7 +144,9 @@ fn run_commit(
 
     let (diff_text_full, files_changed, additions, deletions, top_exts) =
         staged_diff_and_stats(&repo)?;
-
+    
+    println!("=== gca commit: inference result ===");
+    
     if diff_text_full.is_empty(){
         print!("Not thing change");
         return Ok(());
@@ -232,7 +234,6 @@ fn run_commit(
         );
     }
 
-    println!("=== gca commit: inference result ===");
     let row = probs.index_axis(ndarray::Axis(0), 0);
     let mut scored: Vec<(String, f32)> = (0..row.len())
         .map(|i| (labels.get(i).cloned().unwrap_or_else(|| format!("class_{}", i)), row[i]))
