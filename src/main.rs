@@ -34,7 +34,7 @@
 //!   12.772%  refactor
 //!    4.887%  docs
 //! ```
-use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use git2::{DiffFormat, IndexAddOption, Repository};
 use ndarray::{arr2, Array2, CowArray};
@@ -44,7 +44,6 @@ use ort::value::Value;
 use ort::GraphOptimizationLevel;
 use std::collections::BTreeMap;
 use std::fs;
-use std::iter::Skip;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
