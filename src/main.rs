@@ -86,6 +86,47 @@ fn main() -> Result<()> {
     }
 }
 
+fn whitespace_change_ratio(diff_text: &str) -> f32 {
+    use std::collections::HashMap;
+
+    let mut adds_clean: Vec<String> = Vec::new();
+    let mut dels_clean: Vec<String> = Vec::new();
+
+    for raw in diff_text.lines() {
+        if raw.is_empty() { continue; }
+        if raw.starts_with("+++ ") || raw.starts_with("--- ")
+            || raw.starts_with("diff ") || raw.starts_with("@@ ") {
+            continue;
+        }
+        if let Some(rest) = raw.strip_prefix('+') {
+            let clean: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+            adds_clean.push(clean);
+        } else if let Some(rest) = raw.strip_prefix('-') {
+            let clean: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+            dels_clean.push(clean);
+        }
+    }
+
+    if adds_clean.is_empty() && dels_clean.is_empty() {
+        return 0.0;
+    }
+
+    // Counter 等價
+    let mut ca: HashMap<String, usize> = HashMap::new();
+    let mut cd: HashMap<String, usize> = HashMap::new();
+    for t in adds_clean.iter() { *ca.entry(t.clone()).or_insert(0) += 1; }
+    for t in dels_clean.iter() { *cd.entry(t.clone()).or_insert(0) += 1; }
+
+    let mut matches: usize = 0;
+    for (t, ca_cnt) in ca.iter() {
+        if let Some(cd_cnt) = cd.get(t) {
+            matches += (*ca_cnt).min(*cd_cnt);
+        }
+    }
+    let total = adds_clean.len() + dels_clean.len();
+    (2.0 * (matches as f32)) / ((total as f32).max(1.0))
+}
+
 fn run_commit(
     model_path: PathBuf,
     labels_path_opt: String,
@@ -106,13 +147,13 @@ fn run_commit(
 
     let diff_proc = {
         let s = if only_added {
-            extract_added_lines(&diff_text_full)
+            extract_added_lines(&diff_text_full.clone())
         } else {
-            diff_text_full
+            diff_text_full.clone()
         };
         cap_text(&s, max_chars).to_string()
     };
-    let add_div: f32 = (additions as f32) / ((deletions as f32) + 1.0);
+    let ws_ratio: f32 = whitespace_change_ratio(&diff_text_full);
     let exts_proc = if top_exts.is_empty() {
         String::new()
     } else {
@@ -123,44 +164,49 @@ fn run_commit(
         Environment::builder()
             .with_name("gca-commit")
             .build()
-            .context("建立 ORT Environment 失敗")?,
+            .context("Establishing ORT Environment ")?,
     );
     let session: Session = SessionBuilder::new(&env)?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .with_model_from_file(&model_path)
-        .with_context(|| format!("載入 ONNX 失敗: {}", model_path.display()))?;
+        .with_context(|| format!("Load ONNX failure: {}", model_path.display()))?;
 
-    let diff_cow = CowArray::from(Array2::from_shape_vec((1, 1), vec![diff_proc.clone()])?.into_dyn());
-    let exts_cow = CowArray::from(Array2::from_shape_vec((1, 1), vec![exts_proc.clone()])?.into_dyn());
+    let diff_cow  = CowArray::from(Array2::from_shape_vec((1,1), vec![diff_proc.clone()])?.into_dyn());
+    let exts_cow  = CowArray::from(Array2::from_shape_vec((1,1), vec![exts_proc.clone()])?.into_dyn());
     let files_cow = CowArray::from(arr2(&[[files_changed as f32]]).into_dyn());
+    let adds_cow  = CowArray::from(arr2(&[[additions as f32]]).into_dyn());
+    let dels_cow  = CowArray::from(arr2(&[[deletions as f32]]).into_dyn());
+    let add_div   = (additions as f32) / ((deletions as f32) + 1.0);
     let add_div_cow = CowArray::from(arr2(&[[add_div]]).into_dyn());
+    let ws_cow    = CowArray::from(arr2(&[[ws_ratio]]).into_dyn());
 
     let diff_tensor = Value::from_array(session.allocator(), &diff_cow)?;
     let exts_tensor = Value::from_array(session.allocator(), &exts_cow)?;
     let files_tensor = Value::from_array(session.allocator(), &files_cow)?;
+    let adds_tensor  = Value::from_array(session.allocator(), &adds_cow)?;
+    let dels_tensor  = Value::from_array(session.allocator(), &dels_cow)?;
     let add_div_tensor = Value::from_array(session.allocator(), &add_div_cow)?;
+    let ws_tensor    = Value::from_array(session.allocator(), &ws_cow)?;
 
-    let mut diff_v = Some(diff_tensor);
-    let mut exts_v = Some(exts_tensor);
-    let mut files_v = Some(files_tensor);
+    let mut diff_v    = Some(diff_tensor);
+    let mut exts_v    = Some(exts_tensor);
+    let mut files_v   = Some(files_tensor);
+    let mut adds_v    = Some(adds_tensor);
+    let mut dels_v    = Some(dels_tensor);
     let mut add_div_v = Some(add_div_tensor);
+    let mut ws_v      = Some(ws_tensor);
 
     let mut input_values: Vec<Value> = Vec::with_capacity(session.inputs.len());
     for spec in &session.inputs {
         match spec.name.as_str() {
-            "diff_proc" => input_values.push(
-                diff_v.take().ok_or_else(|| anyhow!("Repeatedly  input: diff_proc"))?
-            ),
-            "exts_proc" => input_values.push(
-                exts_v.take().ok_or_else(|| anyhow!("Repeatedly  input: exts_proc"))?
-            ),
-            "files_changed" => input_values.push(
-                files_v.take().ok_or_else(|| anyhow!("Repeatedly  input: files_changed"))?
-            ),
-            "add_div" => input_values.push(
-                add_div_v.take().ok_or_else(|| anyhow!("Repeatedly  input: add_div"))?
-            ),
-            other => return Err(anyhow!("Unknown model input: {other}")),
+            "diff_proc"      => input_values.push(diff_v.take().ok_or_else(|| anyhow!("Repeated input: diff_proc"))?),
+            "exts_proc"      => input_values.push(exts_v.take().ok_or_else(|| anyhow!("Repeated input: exts_proc"))?),
+            "files_changed"  => input_values.push(files_v.take().ok_or_else(|| anyhow!("Repeated input: files_changed"))?),
+            "additions"      => input_values.push(adds_v.take().ok_or_else(|| anyhow!("Repeated input: additions"))?),
+            "deletions"      => input_values.push(dels_v.take().ok_or_else(|| anyhow!("Repeated input: deletions"))?),
+            "ws_ratio"       => input_values.push(ws_v.take().ok_or_else(|| anyhow!("Repeated input: ws_ratio"))?),
+            "add_div"        => input_values.push(add_div_v.take().ok_or_else(|| anyhow!("Repeated input: add_div"))?),
+            other            => return Err(anyhow!("Unknown model input: {other}")),
         }
     }
 
