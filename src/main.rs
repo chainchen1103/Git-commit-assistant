@@ -145,6 +145,9 @@ fn run_commit(
     let (diff_text_full, files_changed, additions, deletions, top_exts) =
         staged_diff_and_stats(&repo)?;
 
+    if diff_text_full.is_empty(){
+        print!("Not thing change");
+    }
     let diff_proc = {
         let s = if only_added {
             extract_added_lines(&diff_text_full.clone())
